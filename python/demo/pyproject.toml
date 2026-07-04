@@ -1,0 +1,36 @@
+[project]
+name = "webeyetrack-demo"
+version = "0.0.1"
+description = "PyQt5 webcam gaze-tracking demo for the WebEyeTrack package"
+requires-python = ">=3.10, <3.13"
+dependencies = [
+    "webeyetrack",
+    "PyQt5",
+    "imutils",
+    "pyyaml",
+    "screeninfo; platform_system != 'Darwin'",
+    "pyobjc-framework-Quartz; platform_system == 'Darwin'",
+    # main.py does `from webeyetrack import vis`; vis.py imports sklearn and
+    # matplotlib, which webeyetrack itself does not declare. (mediapipe used to
+    # pull matplotlib transitively, but <0.10.31 does not.)
+    "scikit-learn",
+    "matplotlib",
+    # A single, headless cv2 provider (see override-dependencies below).
+    "opencv-contrib-python-headless",
+]
+
+[tool.uv.sources]
+webeyetrack = { path = "..", editable = true }
+
+[tool.uv]
+# The demo scripts are not an installable package.
+package = false
+# Force every cv2 provider to the headless build above: webeyetrack pulls
+# opencv-python and mediapipe pulls opencv-contrib-python, both non-headless
+# and both shipping Qt plugins that clash with PyQt5. The markers below never
+# evaluate true, so neither is installed; opencv-contrib-python-headless
+# supplies cv2 for all consumers.
+override-dependencies = [
+    "opencv-python; sys_platform == 'never'",
+    "opencv-contrib-python; sys_platform == 'never'",
+]

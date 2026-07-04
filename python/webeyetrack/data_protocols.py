@@ -3,7 +3,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 import numpy as np
 import pathlib
-import mediapipe.python as mp
 
 @dataclass
 class Annotations:

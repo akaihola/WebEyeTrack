@@ -9,7 +9,6 @@ from collections import defaultdict
 import yaml
 from webeyetrack import WebEyeTrack, WebEyeTrackConfig
 from webeyetrack.data_protocols import TrackingStatus
-from webeyetrack.constants import GIT_ROOT
 from webeyetrack import vis
 
 from constants import *
