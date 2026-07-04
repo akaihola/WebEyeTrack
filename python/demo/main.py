@@ -9,6 +9,7 @@ from collections import defaultdict
 import yaml
 from webeyetrack import WebEyeTrack, WebEyeTrackConfig
 from webeyetrack.data_protocols import TrackingStatus
+from webeyetrack.webeyetrack import CalibConfig, KalmanFilterConfig
 from webeyetrack import vis
 
 from constants import *
@@ -82,12 +83,27 @@ class App(QtWidgets.QMainWindow):
         width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
+        calib_yml = config.get('calib', {})
+        calib_config = CalibConfig(
+            max_points=calib_yml.get('max_points', CalibConfig.max_points),
+            click_ttl=calib_yml.get('click_ttl', CalibConfig.click_ttl),
+        )
+        kalman_yml = config.get('kalman_filter', {})
+        kalman_config = KalmanFilterConfig(
+            enabled=kalman_yml.get('enabled', KalmanFilterConfig.enabled),
+            dt=kalman_yml.get('dt', KalmanFilterConfig.dt),
+            process_noise=kalman_yml.get('process_noise', KalmanFilterConfig.process_noise),
+            measurement_noise=kalman_yml.get('measurement_noise', KalmanFilterConfig.measurement_noise),
+        )
+
         # Initialize the WebEyeTrack pipeline
         self.wet = WebEyeTrack(
             WebEyeTrackConfig(
                 screen_px_dimensions=(SCREEN_WIDTH_PX, SCREEN_HEIGHT_PX),
                 screen_cm_dimensions=(SCREEN_WIDTH_MM/10, SCREEN_HEIGHT_MM/10),
-                verbose=config['verbose']
+                verbose=config['verbose'],
+                calib_config=calib_config,
+                kalman_config=kalman_config,
             )
         )
 
