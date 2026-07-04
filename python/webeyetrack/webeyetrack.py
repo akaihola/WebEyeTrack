@@ -226,12 +226,13 @@ class WebEyeTrack():
             self.calib_data['timestamps'] = self.calib_data['timestamps'][-max_points:]
             self.calib_data['pt_type'] = self.calib_data['pt_type'][-max_points:]
 
-        # Apply time-to-live pruning for 'click' points
+        # Apply time-to-live pruning for 'click' points. Iterate in reverse so
+        # that popping entries does not shift the indices still to be visited.
         current_time = time.time()
         ttl = self.config.calib_config.click_ttl
-        for i in self.calib_data['timestamps']:
-            if current_time - i > ttl and self.calib_data['pt_type'][i] == 'click':
-                index = self.calib_data['timestamps'].index(i)
+        for index in range(len(self.calib_data['timestamps']) - 1, -1, -1):
+            timestamp = self.calib_data['timestamps'][index]
+            if current_time - timestamp > ttl and self.calib_data['pt_type'][index] == 'click':
                 self.calib_data['support_x'].pop(index)
                 self.calib_data['support_y'].pop(index)
                 self.calib_data['timestamps'].pop(index)
