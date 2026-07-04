@@ -373,11 +373,10 @@ class App(QtWidgets.QMainWindow):
                         qeye_patch = QtGui.QImage(eye_patch.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
                         self.eye_patch_label.setPixmap(QtGui.QPixmap.fromImage(qeye_patch))
              
-                # If the prediction is outside of [-0.4, 0.4], clip it
+                # If the prediction is outside of [-0.5, 0.5], clip it
                 bound = 0.5
-                y_margin = 0.05
                 gaze_result.norm_pog[0] = np.clip(gaze_result.norm_pog[0], -bound, bound)
-                gaze_result.norm_pog[1] = np.clip(gaze_result.norm_pog[1], -(bound-y_margin), bound-y_margin)
+                gaze_result.norm_pog[1] = np.clip(gaze_result.norm_pog[1], -bound, bound)
 
                 # Update the gaze dot position
                 gaze_x, gaze_y = gaze_result.norm_pog
