@@ -17,11 +17,10 @@ class CalibrationWidget(QtWidgets.QWidget):
         # self.calibration_steps = 9
         self.current_step = 0
 
-        self.calib_positions = np.array([ # 4 points
-            [-0.4, -0.4],
-            [0.4, -0.4],
-            [-0.4, 0.4],
-            [0.4, 0.4],
+        self.calib_positions = np.array([ # 3x3 grid (9 points)
+            [-0.45, -0.45], [0.0, -0.45], [0.45, -0.45],
+            [-0.45,  0.0 ], [0.0,  0.0 ], [0.45,  0.0 ],
+            [-0.45,  0.45], [0.0,  0.45], [0.45,  0.45],
         ])
         self.current_position = self.calib_positions[0]
 
