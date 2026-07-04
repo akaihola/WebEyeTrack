@@ -213,11 +213,11 @@ class App(QtWidgets.QMainWindow):
             calib_gaze_results = []
             calib_norm_pogs = []
             pred_norm_pogs = []
+            max_samples_per_point = 5
             for point, gaze_results in self.calib_pts.items():
                 # Before adding the frames, we get many points for each
-                # calibration point, so we should try to find the best
-                # one. We want to find the center of the points (remove outliers)
-                # and pick the centermost point.
+                # calibration point. Keep several samples nearest their center
+                # so the affine fit has redundancy while limiting outliers.
                 if gaze_results:
                     pogs = [gaze_result.norm_pog for gaze_result in gaze_results]
                     pogs = np.array(pogs)
@@ -228,13 +228,14 @@ class App(QtWidgets.QMainWindow):
 
                     print(f"Calibration point {point}: mean={mean_pog}, std={std_pog}")
                     
-                    # Get the point closest to the mean
+                    # Get the samples closest to the mean.
                     distances = np.linalg.norm(pogs - mean_pog, axis=1)
-                    closest_index = np.argmin(distances)
-                    best_pog = pogs[closest_index]
-                    calib_gaze_results.append(gaze_results[closest_index])
-                    calib_norm_pogs.append(point)
-                    pred_norm_pogs.append(best_pog)
+                    n_samples = min(max_samples_per_point, len(gaze_results))
+                    closest_indices = np.argsort(distances)[:n_samples]
+                    for idx in closest_indices:
+                        calib_gaze_results.append(gaze_results[idx])
+                        calib_norm_pogs.append(point)
+                        pred_norm_pogs.append(pogs[idx])
 
 
             # If we have enough points, we can proceed with the calibration
