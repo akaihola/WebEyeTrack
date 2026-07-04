@@ -7,7 +7,7 @@ authors = [
 ]
 license = 'MIT'
 readme = "README.md"
-requires-python = ">=3.9, <3.13" # mediapipe requires 3.9-3.12
+requires-python = ">=3.10, <3.13" # 3.9 is EOL (2025-10); capped <3.13 because the pinned mediapipe==0.10.21 (see deps) has no 3.13 wheels
 
 keywords = ["eye-tracking", "scalable", "rgb", "gaze"]
 
@@ -16,7 +16,11 @@ classifiers = [
 ]
 
 dependencies = [
-    'mediapipe',
+    # webeyetrack.vis uses the legacy `mediapipe.solutions` API, which was
+    # dropped from the wheels after 0.10.21 (gone in 0.10.30/0.10.31+, see
+    # google-ai-edge/mediapipe#6192). 0.10.21 is the last release that ships it,
+    # and its wheels only cover Python 3.10-3.12 — hence requires-python <3.13.
+    'mediapipe==0.10.21',
     'numpy',
     "opencv-python",
     "scipy",
