@@ -174,7 +174,13 @@ class App(QtWidgets.QMainWindow):
         if self.latest_gaze_result is None:
             print("No gaze result available yet.")
             return
-        
+
+        # Closed-eye results use the screen center as a placeholder and are not
+        # valid calibration samples.
+        if self.latest_gaze_result.gaze_state == 'closed':
+            print("Latest gaze result has closed eyes; skipping click calibration.")
+            return
+
         returned_calib = self.wet.adapt_from_gaze_results(
             [self.latest_gaze_result],
             np.array([[x, y]]),
@@ -386,8 +392,13 @@ class App(QtWidgets.QMainWindow):
                 # Update the gaze speed
                 self.gaze_speed_updated.emit(gaze_result.durations)
 
-                # If calibrating, store the calibration point
-                if self.calibrating and self.current_calib_point is not None:
+                # Closed-eye results use the screen center as a placeholder, so
+                # exclude them from calibration data.
+                if (
+                    self.calibrating
+                    and self.current_calib_point is not None
+                    and gaze_result.gaze_state != 'closed'
+                ):
                     self.calib_pts[self.current_calib_point].append(gaze_result)
 
                 # Store the latest gaze result
