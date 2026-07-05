@@ -335,8 +335,13 @@ truth is clean enough, and that offline replay reproduces live behavior.
 
 1. Corpus hosting: private GitHub+LFS vs object storage+DVC (decide when the corpus
    outgrows a few hundred MB).
-2. Should the recording harness live in rollscore (it already has the spike + server)
-   or in the new eval repo from day one? Phase 0 is easiest inside rollscore.
+2. ~~Should the recording harness live in rollscore or in the new eval repo from day
+   one?~~ **Decided 2026-07-05: start inside rollscore.** Built on rollscore branch
+   `claude/gaze-eval-recording-harness`: `web/spike/record-session.html` +
+   `record-scenes.js` (scenes 1–3: lead-in, 9-point calibration, pursuit sweep,
+   fixed-target head sweeps), producing `video.webm` + `session.json`
+   (schema `rollscore-gaze-session/1`), with vitest unit tests and a headless
+   fake-camera Playwright smoke (`web/tools/record_session_smoke.py`).
 3. Record `pose_ref.jsonl` with which pose estimator — the same MediaPipe the tracker
    uses (consistent but correlated) or an independent one (e.g. OpenFace) for
    bucketing? Phase 0: MediaPipe, revisit if pose-sector results look suspicious.
