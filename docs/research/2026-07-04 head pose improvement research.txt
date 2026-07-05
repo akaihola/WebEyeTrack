@@ -1,0 +1,518 @@
+cwd: ~/repos/ai/WebEyeTrack
+
+❯ This gaze tracking library boasts the ability to compensate for head          
+  movement. But @python/demo/ still only works properly as long as I keep my    
+  head in the same posture as during calibration. If I raise/lower my cheek or  
+  turn my head left/right, the detection moves into the same direction. Also    
+  even with head kept still, a gaze at the lower edge of the screen is detected 
+  to be much higher than in reality. Analyze this problem, and also look for    
+  online discussions and the original paper on arxiv about it. Make heavy use   
+  of subagents with cheaper Claude models when appropriate.                     
+  ⎿  Listed directory python/demo/
+
+● I'll analyze this from three angles in parallel: the code path that's supposed
+  to compensate for head pose, the demo's calibration logic, and the paper plus
+  online discussions. Let me get a quick lay of the land first, then fan out
+  subagents.
+
+  Listed 2 directories (ctrl+o to expand)
+
+● 3 background agents launched (↓ to manage)
+   ├ Explore (Trace head-pose compensation pipeline)
+   ├ Explore (Analyze demo calibration flow)
+   └ Agent (Research WebEyeTrack paper and issues)
+
+● While those run, I'll read the core pipeline file myself to form an
+  independent judgment.
+
+  Read 2 files (ctrl+o to expand)
+
+● While waiting for the subagents, one more load-bearing detail from
+  blazegaze.py: the gaze head is tiny — Dense(16) → Dense(16) → Dense(2) (line
+  213–217), fed a concatenation of a 512-dim flattened image embedding plus the
+  3-dim head vector and 3-dim face origin. So head pose is 6 numbers out of 518
+  going into a 16-unit bottleneck, and calibration fine-tunes this whole MLP on
+  a handful of samples. The three subagents are still working; I'll synthesize
+  the full analysis when they report back.
+
+✻ Cooked for 1m 46s
+
+● Agent "Analyze demo calibration flow" finished · 3m 4s
+
+● The demo analysis is in — key findings: calibration uses only 4 corner points 
+  at ±0.4 (no center, no bottom-edge points), the demo clips vertical 
+  predictions to ±0.45 while the screen extends to ±0.5, most of config.yml's
+  calibration/Kalman settings are dead (never wired into the library), and
+  calibration data from all past sessions accumulates and gets blended into
+  every new adaptation. Two subagents (library pipeline trace, paper/issues
+  research) are still running; I'll deliver the full synthesis when they finish.
+
+✻ Sautéed for 7s
+
+● Agent "Research WebEyeTrack paper and issues" finished · 3m 45s
+
+● The research agent is back with the paper (arXiv:2508.19544) and GitHub
+  findings — notably, head-pose handling is just an input feature to a tiny MLP,
+  not a geometric correction, and the paper never reports
+  vertical-vs-horizontal error. One subagent (the library pipeline trace) is
+  still running; I'll synthesize everything once it reports.
+
+✻ Cogitated for 9s
+
+● Agent "Trace head-pose compensation pipeline" finished · 4m 21s
+
+● All three subagents are done. One load-bearing detail I want to verify myself
+  before synthesizing — how the demo handles blink frames (gaze_state == 
+  'closed'), because the library returns norm_pog = (0,0) for them, and in this
+  coordinate system (0,0) is the screen center:
+
+  Read 2 files (ctrl+o to expand)
+
+● All three investigations are complete and they converge on a clear picture.
+  Here is the full analysis.
+
+  TL;DR
+
+  The "head movement compensation" in WebEyeTrack is not geometric — head pose
+  is merely 6 numbers (3-dim head vector + 3-dim face origin) concatenated with
+  512 image features and fed into a tiny 16→16→2 MLP that directly regresses
+  screen coordinates. Whatever compensation exists must be learned, and
+  calibration actively destroys it: the demo fine-tunes that whole MLP plus fits
+  an affine correction using samples taken at one single head pose, so the
+  correction is only valid in that posture. The bottom-edge bias has several
+  compounding causes, including a hard-coded clamp in the demo that makes the
+  bottom 5% of the screen literally unreachable, calibration points that never
+  go below ±0.4, and blink-detection snapping half-closed (downward-gazing) eyes
+  to screen center. The paper (arXiv:2508.19544) never demonstrates head-pose
+  invariance — no ablation, no vertical-vs-horizontal error breakdown — and a
+  GitHub issue independently confirms calibration-induced degradation.
+
+  How the pipeline actually works
+
+  Frame → MediaPipe FaceLandmarker (478 landmarks + facial transformation
+  matrix) → a 128×512 eye-strip crop → BlazeGaze CNN encoder (frozen) →
+  flattened 512-dim embedding → concatenated with head_vector and face_origin_3d
+  → Dense(16)→Dense(16)→Dense(2) (blazegaze.py:213-217) → normalized screen
+  point, centered at 0 with range [-0.5, 0.5] → optional affine transform →
+  Kalman filter.
+
+  Notably, model_based.py:401-939 contains a complete geometric gaze pipeline —
+  eyeball-sphere ray estimation, head-pose rotation composition, and
+  gaze-ray/screen-plane intersection (compute_pog, screen_plane_intersection) —
+  but it is dead code. Nothing in the live path ever calls it. The shipped
+  product relies entirely on the MLP implicitly learning head compensation.
+
+  Why the gaze follows your head (ranked causes)
+
+  1. Calibration overfits to your calibration-time head pose. adapt()
+  (webeyetrack.py:320-428) runs 10 Adam steps (demo: lr=1e-4, main.py:245-252)
+  on the entire gaze MLP using samples where head_vector and face_origin_3d are
+  nearly constant. With constant pose inputs, the fine-tune freely co-adapts the
+  pose-feature weights to act as a bias term. Simultaneously a 2×3 affine map
+  is least-squares-fitted from just 4 points — also pose-specific. When you then
+  turn or tilt your head, the eye-patch appearance changes (the strip is
+  cropped by face-aligned homography, so a rotated head yields a
+  different-looking patch), and neither the overfitted MLP nor the affine has
+  any valid correction for it — the prediction drifts with the head. This
+  matches the gaze-decomposition literature: few-shot personalization learns a
+  bias valid only at the calibration pose (Chen & Shi, arXiv:1905.04451).
+  2. The pose features the MLP could use are noisy and inconsistent. The metric
+  scale hangs entirely on a hard-coded 1.2 cm iris diameter, estimated once from
+  the first frame and frozen (webeyetrack.py:247-248). Two mutually
+  inconsistent camera models are used in the same reconstruction: a fixed 60°
+  vertical FOV perspective matrix (constants.py:65) and a fallback intrinsics
+  guess of focal length = image width (utilities.py:399-433, called without FOV
+  at webeyetrack.py:251). And the Euler-angle sign conventions differ between
+  get_head_vector (model_based.py:82) and face_reconstruction
+  (model_based.py:275) with hand-tuned "flip"/"swap" comments — pitch (the
+  vertical axis) is exactly where an inconsistency would hurt.
+  3. Train/inference feature mismatch in the default model. The shipped weights
+  are blazegaze_mpiifacegaze.keras (constants.py:9), and the MPIIFaceGaze
+  preprocessing feeds the net the dataset's ground-truth 3D face center
+  (scripts/preprocessing/mpiifacegaze.py:149,294) — not the output of the
+  MediaPipe reconstruction used at inference. So the live face_origin_3d comes
+  from a different distribution than the one the model was trained on, weakening
+  whatever pose compensation was learned.
+  4. Structural capacity. 6 pose numbers out of 518 inputs into a 16-unit
+  bottleneck gives the network very little machinery to disentangle pose from
+  gaze in the first place, and the training sets (MPIIFaceGaze/GazeCapture) have
+  limited head-pose diversity — the very motivation for ETH-XGaze
+  (arXiv:2007.15837).
+
+  Why the bottom edge reads too high (ranked causes)
+
+  1. The demo clamps y to ±0.45 (main.py:377-380) while the screen spans ±0.5 —
+  the bottom (and top) ~5% of the screen is unreachable by construction,
+  independent of model quality.
+  2. Calibration never samples the bottom. Only 4 corner points at (±0.4, ±0.4)
+  (calibration_widget.py:20-25) — no center, no edge midpoints. The 6-parameter
+  affine is fitted on exactly 4 points (the gate is len(support_y) > 3,
+  webeyetrack.py:383) with zero redundancy, and everything below y=0.4 is
+  extrapolation. Any compression of the model's vertical range there goes
+  uncorrected.
+  3. Blink handling corrupts bottom calibration points. Looking down droops the
+  eyelids; when EAR drops below 0.2 the library returns norm_pog = (0,0) — which
+  in this centered coordinate system is the screen center, not a sentinel
+  (webeyetrack.py:594-610). The demo appends these to the calibration buffer
+  unfiltered (main.py:390-391), dragging the per-point mean (and possibly the
+  selected "centermost" sample, main.py:216-237) toward screen center for the
+  two bottom corners specifically.
+  4. Structural vertical weakness. The eye patch is a 128×512 strip, so the
+  encoder has ~4× less vertical than horizontal resolution; downward gaze
+  partially occludes the iris behind the eyelid; and webcams sit above the
+  screen, so downward gaze is foreshortened. Literature consistently reports
+  vertical error ~1.5–2× horizontal for webcam gaze tracking — the paper never
+  even reports the split.
+
+  Paper and community findings
+
+  The paper is "WebEyeTrack: Scalable Eye-Tracking for the Browser via On-Device
+  Few-Shot Personalization", arXiv:2508.19544 (Davalos et al., Vanderbilt).
+  Points relevant to your symptoms:
+
+  - Head pose is handled exactly as the code shows: metric head pose recovered
+  via iris-scale + "radial Procrustes", then fed as an input feature — the paper
+  contains no ablation showing this actually cancels head motion, and no
+  horizontal/vertical error breakdown.
+  - The paper itself admits browser deployment lacks true camera intrinsics and
+  that the 1.2 cm iris constant is a population average.
+  - Its own cross-dataset test shows drift: 7.24 cm error after 9-point
+  calibration degrading to 8.72 cm over a 20-minute session.
+  - On the GitHub tracker, issue #6 independently reports that accumulating
+  calibration clicks in one area degrades performance, and notes the JS library
+  doesn't even implement the paper's MAML adaptation (it uses affine + one-step
+  Adam). No maintainer response; the repo appears lightly maintained (an
+  unaddressed TF.js memory-leak report sits in PR #7). Your two symptoms are not
+  yet documented anywhere — no issue mentions "head pose" or "vertical".
+  - No substantive discussion exists on HN/Reddit/blogs yet; the paper is from
+  August 2025.
+
+  What could actually be done about it
+
+  In rough order of effort-to-payoff for the Python demo:
+
+  1. Remove or fix the y-clamp in main.py:377-380 (make it symmetric ±0.5) —
+  trivial.
+  2. Filter gaze_state == 'closed' frames out of calibration collection at
+  main.py:390-391, and consider lowering the EAR threshold since downward gaze
+  naturally reduces EAR.
+  3. Use more calibration points including screen edges/center (e.g. a 3×3 grid
+  with a bottom-center point at y≈0.48) and feed more than one sample per point
+  into the affine fit.
+  4. Calibrate at multiple head poses — have the user repeat a few points with
+  head turned left/right/up/down. That's the only way the current architecture
+  (pose as learned feature) can pick up a pose-dependent correction;
+  alternatively, freeze the pose-feature weights during adapt() and only
+  fine-tune the bias/affine so calibration can't destroy the pretrained pose
+  behavior.
+  5. Longer-term: wire up the dead geometric pipeline (compute_pog /
+  screen-plane intersection) as a pose-compensated prior, or at least reconcile
+  the two camera models and the Euler-sign conventions.
+
+  Worth knowing: your symptoms are consistent with structural limitations of the
+  method as shipped, not a misconfiguration on your side — and nobody has filed
+  them upstream yet, so a GitHub issue with these findings would likely be the
+  first concrete report. I can draft one, or start on fixes 1–3 in the demo, if
+  you'd like.
+
+✻ Baked for 6m 34s
+
+❯ Orchestrate a few follow-up tasks:                                            
+  - Use subagents to fix the obvious flaws.                                     
+  - Then give me a realistic estimate of how much we might be able to improve   
+  the accuracy when allowing head pose to change by applying reasonable effort  
+  in WebEyeTrack.                                                               
+  - Then give a similar realistic estimate of how much improvement we could get 
+  from changes to WebGazer.js with similar effort.Then do deep research on      
+  Open Source alternatives beyond these two, with variable head pose support as 
+  a requirement.                                                                
+● Three follow-up streams, orchestrated as: (1) a fix agent for the demo's
+  obvious flaws, (2) a research agent on WebGazer.js improvement potential, (3)
+  the deep-research harness for open-source alternatives — while I write the
+  WebEyeTrack improvement estimate myself from the evidence already gathered.
+
+● 2 background agents launched (↓ to manage)
+   ├ Fix demo calibration flaws
+   └ WebGazer.js improvement potential research
+
+● Now launching the deep-research harness for open-source alternatives with
+  variable head pose support:
+
+● Skill(deep-research)
+  ⎿  Successfully loaded skill
+
+● Workflow(dynamic workflow: deep-research)
+  ⎿  /workflows to view dynamic workflow runs
+
+● All three work streams are now running in the background:
+
+  1. Fix agent — implementing the five demo fixes (symmetric y-clamp, blink
+  filtering in calibration, 3×3 calibration grid reaching the edges,
+  multi-sample affine fitting, wiring the dead config.yml settings through to
+  the library).
+  2. WebGazer.js agent — researching its architecture, documented head-pose
+  sensitivity, and what reasonable-effort changes could buy.
+  3. Deep-research workflow — five parallel search angles on open-source
+  alternatives with variable head pose support, followed by source fetching,
+  adversarial claim verification, and a cited synthesis.
+
+  Meanwhile I'm preparing the WebEyeTrack improvement estimate from the evidence
+  already collected. I'll deliver everything — fixes report, both improvement
+  estimates, and the alternatives comparison — as the results come in.
+
+✻ Brewed for 2m 3s
+
+● Agent "Fix demo calibration flaws" finished · 3m 49s
+
+● The fix agent has finished — all five demo fixes are in the working tree
+  (uncommitted): symmetric ±0.5 clamp, blink-frame filtering in both calibration
+  paths, a 3×3 calibration grid at {−0.45, 0, 0.45}, up to 5 samples per point
+  (up to 45 total) feeding the affine fit, and config.yml's calibration/Kalman
+  settings now actually wired into the library. Compilation and import checks
+  passed; no new lint issues.
+
+  Still waiting on the WebGazer.js research agent and the deep-research workflow
+  on alternatives — I'll synthesize everything, including the WebEyeTrack
+  improvement estimate, once they report.
+
+✻ Cogitated for 7s
+
+● Agent "WebGazer.js improvement potential research" finished · 7m 4s
+
+● The WebGazer.js research is in — key takeaways: its regression sees only a 
+  120-dimensional grayscale eye-pixel vector, head pose never enters the model
+  at all, and the "incorporate head movement" GitHub issue has been open since
+  2016 with a maintainer confirming in 2020 it was still unimplemented (it
+  remains so today). Documented accuracy is ~4° / ~170 px, degrading ~49% over a
+  20-minute session vs. WebEyeTrack's ~20%.
+
+  The deep-research workflow on open-source alternatives is still running; once
+  it completes I'll deliver the full synthesis with both improvement estimates
+  and the alternatives comparison.
+
+✻ Brewed for 7s
+
+● Dynamic workflow "Deep research harness — fan-out web searches, fetch sources,
+adversarially verify claims, synthesize a cited report." completed · 12m 7s
+
+● The deep-research workflow has completed (108 agents, all findings
+  adversarially verified). The result was truncated in the notification — let me
+  retrieve the full report before synthesizing.
+
+  Read 1 file, listed 1 directory, ran 5 shell commands, wrote 2 memories (ctrl+o to expand)
+
+● Everything is complete. Here is the full synthesis of all four work streams.
+
+  1. Fixes applied (uncommitted, in your working tree)
+
+  A subagent implemented all five obvious flaws in python/demo/ and verified
+  compilation and imports:
+
+  - Symmetric clamp — y is no longer squeezed to ±0.45; both axes now clip to
+  ±0.5 (main.py:404-407). The bottom 5% of the screen was previously unreachable
+  by construction.
+  - Blink filtering — frames with gaze_state == 'closed' (whose norm_pog is
+  (0,0) = screen center) are now excluded from both the dot-calibration buffer
+  and click-calibration. This was silently corrupting bottom-corner calibration,
+  since looking down lowers the eye-aspect ratio toward the blink threshold.
+  - 3×3 calibration grid at x,y ∈ {−0.45, 0, 0.45} replaces the 4 corners at
+  ±0.4 — the bottom edge is now actually calibrated. Total calibration time ≈ 23
+  s.
+  - Up to 5 samples per point (≤45 total) now feed the 6-parameter affine fit
+  instead of exactly 4 — the fit finally has redundancy.
+  - config.yml is no longer partly dead — calib.max_points, calib.click_ttl, and
+  the whole kalman_filter section are now passed into WebEyeTrackConfig.
+
+  These should substantially fix the bottom-edge symptom even with your head
+  still. Test with a fresh demo launch (calibration state doesn't persist across
+  runs). Say the word and I'll commit them.
+
+  2. Realistic improvement estimate: WebEyeTrack under variable head pose
+
+  Anchors: the paper's own cross-dataset test measured 7.24 cm (~7° at 60 cm)
+  right after calibration, drifting to 8.72 cm over 20 minutes; the best
+  published webcam pipeline with explicit pose handling achieves ~3.2° static → 
+  ~5.1° under ±30° yaw / ±25° pitch (Falch 2024, n=1). Those bracket what's
+  physically achievable.
+
+  With reasonable effort (1–4 weeks), staying inside WebEyeTrack:
+
+  - Multi-pose calibration + constrained adaptation (~1 week): repeat a few
+  calibration points with the head turned left/right/up/down, and stop the
+  fine-tune from destroying pretrained pose behavior (e.g. freeze the MLP and
+  fit only the affine, or fit per-pose-bucket affines and interpolate by head
+  vector). Since the current failure is a correction valid at exactly one pose,
+  this attacks the dominant error term directly. Realistic gain: roughly 30–50% 
+  less pose-induced drift within the calibrated pose range (±15–20° yaw).
+  Speculative but well-grounded: the residual error is the base model's pose
+  sensitivity, which calibration currently amplifies.
+  - Fix the face_origin_3d train/inference mismatch (~1–2 weeks, needs GPU + 
+  MPIIFaceGaze): re-preprocess the training data through the same MediaPipe
+  reconstruction used live and retrain. This is the most principled fix and the
+  repo's training scripts exist, but the payoff is uncertain — I'd guess 10–20%
+  overall error reduction.
+  - Wire up the dead geometric pipeline (compute_pog ray/screen intersection) as
+  a pose-compensated prior fused with the CNN output: this is what the ~5°
+  under ±30° yaw class of systems does, but it's at the upper edge of
+  "reasonable" (3–4+ weeks, plus reconciling the inconsistent camera models and
+  Euler conventions first).
+
+  Bottom line: demo-plus-calibration-level work plausibly takes you from
+  "unusable when the head moves" to "usably degraded" (maybe 5–8° effective
+  error under moderate pose change). Matching the ~5°-under-±30°-yaw state of
+  the art requires the geometric route and retraining — months, not weeks.
+
+  3. Realistic improvement estimate: WebGazer.js
+
+  WebGazer is architecturally far more limited: its regression sees only a 
+  120-dimensional grayscale eye-pixel vector (two 6×10 patches) — head pose
+  never enters the model in any form. "Incorporate head movement" is GitHub 
+  issue #2, open since February 2016; a maintainer confirmed in 2020 it was
+  still planned, and the current source shows it never shipped. Documented
+  behavior: ~4.17° / ~170 px best case, ~40–50% worse angular error under
+  natural head motion vs. head-still, and 7.79 → 11.62 cm (+49%) over a
+  20-minute session in WebEyeTrack's own comparison.
+
+  With 1–4 weeks: add head-pose features from the already-running FaceMesh to
+  the ridge regression, homography-warp the eye patch to a canonical view before
+  feature extraction, re-enable the (commented-out) blink filter, and
+  recalibrate more aggressively during click-free tasks (the typing-signal trick
+  already published: +16% for touch typists). Because the model stays linear,
+  this can only capture an additive pose correction, not the nonlinear
+  appearance warp — a defensible target is ~15–25% reduction in degraded-state 
+  error (e.g. 11.6 → ~9–10 cm). Closing to WebEyeTrack's level would mean
+  replacing the model entirely.
+
+  Comparative verdict: effort invested in WebEyeTrack buys more than the same
+  effort in WebGazer — WebEyeTrack has the pose signals, metric 3D machinery,
+  and even the screen-intersection code already in the repo (just unused), while
+  WebGazer's ceiling is its linear regression.
+
+  4. Open-source alternatives with variable head pose support
+
+  The deep-research run (108 agents; 125 claims extracted, 25 sources, 3-vote
+  adversarial verification, 2 claims killed) found the field splits into two
+  camps: models trained on wide-pose data (Gaze360-based) vs. pipelines with
+  explicit pose input + 3D gaze-ray-to-screen intersection.
+
+  Candidate: FalchLucas/WebCamGazeEstimation (Frontiers 2024)
+  Pose handling: Pose-as-input CNN + 3D ray→screen + SfM translation
+  compensation
+  Accuracy (verified): 3.2° static; 5.1° under ±30° yaw/±25° pitch; 4° under ±10
+
+    cm translation
+  Calibration: 4 points
+  License / platform: No license file; Python
+  Status: ~19 commits, paper artifact; n=1 evaluation
+  ────────────────────────────────────────
+  Candidate: OpenFace 3.0 (CMU, 2025)
+  Pose handling: Trained multi-pose; outputs 3D gaze vector (no screen mapping)
+  Accuracy (verified): 2.56° MPIIGaze, 10.6° Gaze360; 38 ms/frame CPU
+  Calibration: None
+  License / platform: Python
+  Status: Actively maintained; numbers self-reported
+  ────────────────────────────────────────
+  Candidate: L2CS-Net / yakhyo/gaze-estimation
+  Pose handling: Implicit (Gaze360-trained); pitch/yaw only, no screen stage
+  Accuracy (verified): ~10.4–13° Gaze360 MAE
+  Calibration: None
+  License / platform: MIT; Python/PyTorch, yakhyo has ONNX exports
+  Status: Maintained (yakhyo more modern)
+  ────────────────────────────────────────
+  Candidate: OpenFace 2.x
+  Pose handling: Geometric 3D eyeball + shared head-pose frame
+  Accuracy (verified): No quantitative gaze numbers in repo
+  Calibration: None
+  License / platform: C++/MATLAB
+  Status: Unmaintained since 2019/2021 — reference architecture only
+  ────────────────────────────────────────
+  Candidate: EyeTheia (2026)
+  Pose handling: None (deferred to future work)
+  Accuracy (verified): ~45 px after calibration
+  Calibration: 13 points + fine-tune
+  License / platform: GPL-3.0; browser UI but Python backend
+  Status: Preprint-stage
+
+  Field context (TPAMI survey): even the best free-head-pose models sit around
+  10° uncalibrated on Gaze360-like conditions, while calibrated geometric
+  pipelines reach 3–5° — so some drift under extreme rotation is inherent to
+  webcam-only tracking, and the winning recipe is wide-pose training plus
+  explicit rectification (virtual-camera rotation, the "M = SR" normalization
+  from Zhang et al., ETRA 2018) plus pose-aware screen mapping.
+
+  Recommendations:
+  - (a) Python desktop: the Falch pipeline is the closest match to your exact
+  pain point (verified numbers under head rotation) but is n=1-validated and
+  license-less — treat it as a design blueprint. The robust build is OpenFace 
+  3.0 or yakhyo's ONNX models as the gaze-vector engine, plus your own
+  ray-to-screen intersection and few-point calibration — which is essentially
+  "what WebEyeTrack's dead code was supposed to be."
+  - (b) Browser: nothing verified beats WebEyeTrack as a drop-in. The realistic
+  path is porting a Gaze360-trained ONNX model (yakhyo's MobileOne export) to
+  ONNX Runtime Web with FaceMesh-based pose rectification — a build, not an
+  install.
+
+  Caveats worth knowing: OpenFace 3.0's headline numbers lack independent
+  replication; several requested candidates (OpenGaze, GazeML, EyeGestures,
+  GazeTracking, pl-gaze-estimation) didn't survive claim verification —
+  attrition, not proof of unsuitability; and cross-paper accuracy numbers use
+  different protocols, so the table isn't strictly commensurable.
+
+  I've saved the whole investigation to `webeyetrack-accuracy-investigation.md`.
+  Natural next steps if you want them:
+  commit the demo fixes, live-test calibration quality, prototype
+  multi-pose calibration (the highest-leverage WebEyeTrack change), or file the
+  findings upstream as GitHub issues.
+
+---
+
+Second opinion and concrete direction (2026-07-04)
+
+RollScore needs sufficiently accurate vertical gaze to identify the staff system
+being read. Horizontal sweep detection and sequential constraints are useful,
+but they do not remove this vertical-accuracy requirement.
+
+Recommended component decision: fork and improve WebEyeTrack's browser
+implementation. Do not invest the first development cycle in WebGazer.js, a
+ground-up gaze estimator, or a research-model port. WebEyeTrack is imperfect,
+but it already has the two inputs the solution needs: an eye-appearance
+embedding and explicit head-pose/position features. WebGazer has no pose input;
+the alternative wide-pose models generally lack browser-ready point-of-gaze and
+screen-mapping support.
+
+The first improvement should be a RollScore-specific dynamic multi-pose
+calibration layer, not the dormant geometric ray pipeline or full-network
+retraining. At several screen targets, the user should maintain fixation while
+slowly moving through the intended operating envelope (initially about +/-10-15
+degrees yaw, +/-8-10 degrees pitch, plus modest translation). Fit a small,
+regularized pose-conditioned residual model on top of WebEyeTrack's raw output,
+for example corrected_y as a function of raw_y, pitch, yaw, head position, and a
+few raw_y-by-pose interactions. Keep the encoder frozen. A pooled low-capacity
+model is preferable to per-pose affine buckets, which require spatial coverage
+in every bucket and introduce interpolation boundaries.
+
+The evidence supports a realistic target of roughly 20-30% lower overall error
+under moderate pose variation. A 30-50% reduction may be possible specifically
+for the smooth head-correlated part of the error, but should not be promised
+before measurement. The BMVC 2025 MobilePoG study found that pose diversity in
+calibration mattered more than adding screen points at one pose; representative
+dynamic-vs-static improvements were about 20-30%. The earlier 30-50% estimate in
+this note was therefore too confident as an overall-error estimate.
+
+Before implementing the correction, run a fixed-target head-sweep diagnostic:
+log raw gaze, target, head pose and position; train on part of the pose range;
+and test on held-out pose sectors and a later session. Continue with WebEyeTrack
+only if the error is substantially smooth, repeatable, and pose-correlated. If
+eye occlusion or unstable embeddings dominate, replace the base estimator with
+a wide-pose model while retaining the calibration and staff-classification
+layers. Building and training a gaze model from scratch is the last resort.
+
+Judge success by RollScore's actual task: correct staff-system classification,
+adjacent-system confusion, held-out-pose performance, continuous-reading
+stability, and cross-session repeatability. A provisional target is >=95%
+correct system identification in the normal pose envelope, with nearly all
+remaining errors limited to an adjacent system. The vertical p90 error must be
+comfortably less than half the distance between neighboring system centerlines.
+
+Implementation target and detailed development memory:
+~/.claude/projects/-home-akaihola-repos-ai-WebEyeTrack/memory/
