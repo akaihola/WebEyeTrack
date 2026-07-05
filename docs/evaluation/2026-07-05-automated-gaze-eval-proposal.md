@@ -19,8 +19,14 @@ tracker and get comparable numbers.
 
 ### What the application actually needs (from RollScore)
 
-RollScore scrolls sheet music by following the *vertical* reading position. The research
-memo and the staff-system detection spike give concrete acceptance targets:
+RollScore follows the reading position in *both axes*: while a system is being read, the
+score scrolls smoothly forward — keeping the active staff system touching the top of the
+screen — as the gaze approaches the right screen edge; a gaze move *down and back to the
+left edge* signals activation of the next system, which is immediately snapped into view
+if it is partially hidden at the bottom. So vertical accuracy identifies *which* system
+is active, while horizontal position drives progress along the line and, combined with
+the vertical drop, triggers the next-system transition. The research memo and the
+staff-system detection spike give concrete acceptance targets:
 
 - **≥ 95 % correct staff-system identification** within the operating pose envelope
   (initially ~±10–15° yaw, ±8–10° pitch, plus modest translation), with almost all
@@ -30,6 +36,10 @@ memo and the staff-system detection spike give concrete acceptance targets:
   viewport showing 3–4 systems that means centerlines ~200–300 px apart, so vertical p90
   must stay under roughly **10–14 % of viewport height**. (The WebGazer spike measured
   smoothed p90 = 18 % — the gap we need to close.)
+- **Reliable next-system transitions**: the down-and-left return sweep must be detected
+  promptly, with no missed or spurious activations — so horizontal accuracy near the
+  left and right screen edges and responsiveness to that saccade matter, not just
+  static accuracy.
 - **Stability over a session**: drift over 20+ minutes, cross-session repeatability,
   and graceful behavior through blinks and off-score glances.
 
@@ -79,8 +89,11 @@ metadata; replay the frames offline through each candidate tracker.
 4. **Multi-pose calibration scene** — the same 9 points revisited with the head turned
    (feeds future multi-pose calibration APIs; scored as evaluation data for trackers
    that don't use it).
-5. **Reading scene** — real sheet music scrolls at reading pace with a highlighted
-   "read here" cursor; closest proxy for the actual task.
+5. **Reading scene** — the target replays a realistic music-reading pattern over a
+   scrolling score: pursuit left→right along each system, then a *down-and-left
+   saccade* to the start of the next — exercising exactly the right-edge arrival and
+   return-sweep signals the reader's transition logic depends on; closest proxy for
+   the actual task.
 
 **Ground-truth capture details:** record in the browser so the target renderer and the
 camera share one clock — log target position with `performance.now()` and stamp each
@@ -159,7 +172,7 @@ rollscore's `GazeSource` abstraction already has a `ScriptedGazeSource` that rep
 `{x, y, confidence, t}` traces through the scroll controller with no camera or DOM.
 Feed it the *tracker-output traces produced by approach A replays*, run the staff-system
 classifier and scroll controller, and measure what actually matters: system-ID accuracy,
-scroll stability, freeze/coast behavior.
+missed/spurious next-system activations, scroll stability, freeze/coast behavior.
 
 - **Pros:** measures the end-to-end task (R5); decouples cleanly — gaze-error traces
   can even be synthesized from a fitted error model for cheap Monte-Carlo tuning of the
@@ -261,8 +274,10 @@ MediaPipe over the whole corpus.
 Per session × tracker, per scored segment, on smoothed *and* raw output:
 
 - Error: px, % of viewport, cm, and visual degrees (geometry from `meta.json`);
-  mean / median / p90; **horizontal and vertical separately** (vertical is the money
-  metric; the upstream paper never reported the split).
+  mean / median / p90; **horizontal and vertical separately** (vertical decides which
+  system is active — the upstream paper never reported the split; horizontal drives
+  line progress and the next-system trigger, so report it broken out near the left
+  and right screen edges too).
 - **Pose-sector breakdown**: bucket by yaw×pitch from the pose reference; report
   per-sector vertical p90; support **held-out-sector evaluation** (calibrate/fit on
   sectors X, evaluate on sectors Y) — the memo's go/no-go criterion for the
@@ -274,6 +289,9 @@ Per session × tracker, per scored segment, on smoothed *and* raw output:
 - **Staff-system classification proxy**: project vertical predictions onto the La Maja
   page geometry (system centerlines from `gazescroll/systems.py` ground truth) →
   % correct system, % adjacent-system errors. This makes R5 a number, not a feeling.
+- **Transition-event detection**: on reading-scene segments, precision/recall and
+  latency of detected right-edge arrivals and down-left return sweeps (the
+  next-system activation signal) against the scripted ground-truth event times.
 
 ### CI (L4)
 
